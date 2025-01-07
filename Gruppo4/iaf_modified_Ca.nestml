@@ -1,0 +1,298 @@
+"""
+
+###############################################################################
+
+Description
++++++++++++
+
+ we started froma a iaf cond alpha
+
+1) AMPA receptor integrated from Hill Tononi neuron model
+2) NMDA receptor integrated from Hill Tononi neuron model
+
+3) Calcium dynamics integrated following Chindemi et al. 
+4) Update spike shape of the iaf_cond_alpha in order to get a biological range and a iperpolarization post depolarization
+5) upgrade of the Rho function taken from (Chindemi et al.) with a new feedback term
+    we modified also the g_ampa and Use update formulas of the Chindemi et al. 
+        this two changes controlled also by a different approach on the update blocks of the model are made in order to have LTD and LTP without different neurons parameters inizialization
+        and also to block updating of the two variables once Cstar comes down the lower threshold.
+
+
+++++++++++
+
+
+
+
+
+iaf_modified_Ca
+"""
+neuron iaf_modified_Ca:
+    state:
+        V_th mV = V_th_fissa        # Threshold potential
+        flag_B real = 0
+        flag real = 0
+        r integer = 0      # counts number of tick during the refractory period
+        V_m mV = E_L       # membrane potential
+        g_NMDA real = 0
+        g_AMPA real = 0
+        g_AMPA$ real = AMPAInitialValue
+        g_NMDA$ real = NMDAInitialValue
+        h_var real = 0
+        m_var real = 0
+        Ca_concentrazione_i mol/m**3 = 0.000000070 mol/m**3 
+        C_star mol/m**3 = 0 mol/m**3
+        loga real = 10.26
+        Rho real = 0.5
+        Heaviside_p real = 0
+        Heaviside_d real = 0
+        g_AMPA_scale nS = 26 nS
+        USE_scale real = 6
+        g_spike real = 0
+        flag_C real = 0
+        feedback real = 0
+        c_star_corrente mol/m**3 = 0 mol/m**3
+        feedback_active real = 0
+        
+    equations:
+        ################ AMPA CURRENT #############################################
+        recordable inline Eca_syn mV = ( Val / 2 ) * loga
+        recordable inline I_syn_ampa pA = convolve(g_AMPA, AMPA) * g_AMPA_scale * (V_m - AMPA_E_rev)
+        
+        ################ NMDA  calcium fraction current (with Pf_NMDA from Chindemi code)     
+        recordable inline g_NMDA_convolve nS = -convolve(g_NMDA, NMDA) * nS  
+        recordable inline I_syn_nmda pA = -g_NMDA_convolve * (V_m - NMDA_E_rev) / (1 + exp((NMDA_Vact - V_m) / NMDA_Sact))    
+        recordable inline ica_NMDA pA = Pf_NMDA * g_NMDA_convolve * ( ( -40 - V_m ) - 40) * -1
+        
+        #################################### variables for VDCC ###########################
+        recordable inline h_infinity real = 1 / (1 + exp( ( V_hh - V_m) / k_h ) )
+        recordable inline m_infinity real = 1 / (1 + exp( ( V_hm - V_m ) / k_m ) )
+        recordable inline gca_VDCC nS = ( 1e-3 ) * gca_bar_abs_VDCC * m_var * m_var * h_var
+        h_var' = (h_infinity - h_var ) / tau_h
+        m_var' = (m_infinity - m_var ) / tau_m
+        #################################### new current VDCC##############################       
+        recordable inline Ica_VDCC pA = gca_VDCC * ( V_m - Eca_syn )    
+        
+        ##################################################################################
+        recordable inline I_syn pA = Ica_VDCC + I_syn_ampa + I_syn_nmda
+        
+      ################################ IAF currents #########################################
+        kernel g_inh = (e/tau_syn_inh) * t * exp(-t/tau_syn_inh)
+        kernel g_exc = (e/tau_syn_exc) * t * exp(-t/tau_syn_exc)
+        recordable inline I_syn_exc pA = convolve(g_exc, exc_spikes) * nS * ( V_m - E_exc )
+        inline I_syn_inh pA = convolve(g_inh, inh_spikes) * nS * ( V_m - E_inh )
+        inline I_leak pA = g_L * ( V_m - E_L ) * 10
+        
+        ####Repolarization current added in order to have a biological range of Vm during spike, also for the iperpolarization post depolarization
+        recordable inline I_spike mV/ms = -g_spike * ( V_m - E_K ) / Tau_spike 
+        
+        ############################### Membrane potential ######################################
+        V_m' = ( ( -I_leak - I_syn_exc -I_syn_inh - I_syn_ampa -I_syn_nmda - Ica_VDCC ) / C_m ) + I_spike 
+        
+        ######################################### Ca concentration Dynamics##########################################            
+        Ca_concentrazione_i' = - 1 * ( Ica_VDCC + ica_NMDA ) * ( eta / ( 2 * Farad_cost * volume_CR ) ) - (Ca_concentrazione_i - Ca_concentrazione_rest) / tau_calcio
+        
+        ############################################### C* dynamics ##################################################################
+        C_star' = ( -1 * ( C_star / tau_star ) + ( Ca_concentrazione_i - Ca_concentrazione_rest) ) / ms                
+        
+        #####################################  Rho - synaptic efficacy modified #################################################################
+        Rho' = ( (-1 * Rho * ( 1 - Rho ) * ( 0.5 - Rho) ) + ( ( gamma_p * ( 1 - Rho ) * Heaviside_p ) - ( gamma_d * Rho * Heaviside_d ) )+ (K_factor * (0.5 - Rho) * (1 - Heaviside_p) * (1 - Heaviside_d) ) * feedback ) / tau_rho
+        
+        ######################################### Gampa update modified ###############################################################################
+        #siccome abbiamo inizializzto rho a zero 
+        recordable inline g_ampa_target_feedback nS = g_AMPA_scale
+        recordable inline g_AMPA_target nS = (1-feedback) * (gmax_d_AMPA + Rho * (gmax_p_AMPA - gmax_d_AMPA))  +  ((( g_ampa_target_feedback) * (1 - Heaviside_p) * (1 - Heaviside_d) )* feedback)
+        g_AMPA_scale' = (g_AMPA_target - g_AMPA_scale) / tau_ampa_update
+        
+        ######################################### Use(probability of vescicle release)  update modified ###############################################################################        
+        recordable inline USE_target_feedback real = USE_scale
+        recordable inline USE_target real = (1-feedback) * (USE_max_d + Rho * (USE_max_p - USE_max_d)) + (((USE_target_feedback) * (1 - Heaviside_p) * (1 - Heaviside_d) ) * feedback )
+        USE_scale' = (USE_target - USE_scale) / tau_USE_update
+        
+      
+        #############
+        # Synapses  
+        #############
+        kernel g_AMPA' = g_AMPA$ - g_AMPA / AMPA_Tau_2,
+               g_AMPA$' = -g_AMPA$ / AMPA_Tau_1
+               
+        kernel g_NMDA' = g_NMDA$ - g_NMDA / NMDA_Tau_2,
+               g_NMDA$' = -g_NMDA$ / NMDA_Tau_1
+               
+    parameters:
+        V_th_fissa mV = -55 mV
+        V_reset mV = 30 mV      # Reset potential
+        t_ref ms = 1.5 ms          # Refractory period
+        g_L nS = 22 nS      # Leak conductance
+        C_m pF = 250 pF          # Membrane capacitance
+        E_exc mV = 30 mV          # Excitatory reversal potential
+        E_inh mV = -85 mV        # Inhibitory reversal potential
+        E_L mV = -70 mV          # Leak reversal potential (aka resting potential)
+        tau_syn_exc ms = 0.2 ms  # Synaptic time constant of excitatory synapse
+        tau_syn_inh ms = 2 ms    # Synaptic time constant of inhibitory synapse
+        pi real = 3.14
+        E_K mV = -90 mV 
+        Tau_spike ms = 1.75 ms # membrane time constant applying to repolarizing K-current
+        E_ref mV = -77 mV
+        
+       # Synapse parameters
+        AMPA_g_peak nS = 0.1 nS # peak conductance   #AUMENTATO A 0.3 DA 0.1
+        AMPA_E_rev mV = 0.0 mV # reversal potential
+        AMPA_Tau_1 ms = 0.5 ms # rise time
+        AMPA_Tau_2 ms = 2.4 ms # decay time, Tau_1 < Tau_2
+        NMDA_g_peak nS = 0.075 nS # peak conductance              #provo a intervenire quiiiiiiiiiiiiii messo a 0.06 invece che 0.075
+        NMDA_Tau_1 ms = 4.0 ms # rise timee
+        NMDA_Tau_2 ms = 20.0 ms # decay time, Tau_1 < Tau_2
+        NMDA_E_rev mV = 0.0 mV # reversal potential
+        NMDA_Vact mV = -58.0 mV # voltage activation
+        NMDA_Sact mV = 2.5 mV # scale of inactivation    
+        
+        # VDCC (R-type) Parameters with Units
+        gca_bar_VDCC nS/um**2 = 0.0744 nS/um**2    
+        V_hm mV = -5.9 mV                 
+        k_m mV = 9.5 mV                  
+        V_hh mV = -39 mV                 
+        k_h mV = -9.2 mV                   
+        tau_m ms = 1 ms                    
+        tau_h ms = 27 ms                   
+        cao_CR mol/m**3  = 2.0 mol/m**3                      
+        volume_CR um**3 = 1 um**3               # Considered as unit in order to have not the volume dependency
+        Farad_cost C/mol = 96485 C/mol      
+        R_cost J*K/mol = 8.31446261815324 J*K/mol   
+        
+        
+        # Calcium concentration
+        eta real = 0.04 
+        tau_calcio ms = 12 ms
+        Ca_concentrazione_rest mol/m**3  = 0.000000070 mol/m**3 
+        
+        # c star
+        tau_star real = 278.318
+        Val mV = 26.6404858 mV 
+        
+        #Rho
+        tau_rho s = 50 s
+        gamma_p real = 450.0
+        gamma_d real = 100.0
+        theta_d mol/m**3 = 0.00004 mol/m**3  #messe a caso guardando grafico
+        theta_p mol/m**3 = 0.000075 mol/m**3  #messe a caso guardando grafico
+        #modification parameters
+        K_factor real = 30
+        theta_d_ausiliaria mol/m**3 = 0.0000363 mol/m**3  #messe a caso guardando grafico
+
+        
+        #Gampa update
+        tau_ampa_update s = 8 s
+        gmax_d_AMPA nS = 1.0 nS
+        gmax_p_AMPA nS = 50.0 nS  
+        
+        #modification parameters (used also for Use)
+        K_factor_ampa real = 30
+        
+        #USE update        
+        USE_max_d real = 1.0
+        USE_max_p real = 10.0
+        tau_USE_update s = 8.0 s
+        
+       
+
+    internals:
+        RefractoryCounts integer = steps(t_ref) # refractory time in steps
+        
+        # AMPAInitialValue Calculation
+        inline exact_integration_adjustment_AMPA real = (1 / AMPA_Tau_2 - 1 / AMPA_Tau_1) * ms
+        t_peak_AMPA real = (AMPA_Tau_2 * AMPA_Tau_1 * ln(AMPA_Tau_2 / AMPA_Tau_1)) / (AMPA_Tau_2 - AMPA_Tau_1) / ms
+        inline normalisation_factor_AMPA real = 1 / (exp(-t_peak_AMPA / AMPA_Tau_1) - exp(-t_peak_AMPA / AMPA_Tau_2))
+        inline AMPAInitialValue real = AMPA_g_peak * normalisation_factor_AMPA * exact_integration_adjustment_AMPA
+        
+        # NMDAInitialValue Calculation
+        inline exact_integration_adjustment_NMDA real = (1 / NMDA_Tau_2 - 1 / NMDA_Tau_1) * ms
+        t_peak_NMDA real = (NMDA_Tau_2 * NMDA_Tau_1 * ln(NMDA_Tau_2 / NMDA_Tau_1)) / (NMDA_Tau_2 - NMDA_Tau_1) / ms
+        inline normalisation_factor_NMDA real = 1 / (exp(-t_peak_NMDA / NMDA_Tau_1) - exp(-t_peak_NMDA / NMDA_Tau_2))
+        inline NMDAInitialValue real = NMDA_g_peak * normalisation_factor_NMDA * exact_integration_adjustment_NMDA
+        
+        
+        Pf_NMDA real = (4 * cao_CR) / (4 * cao_CR + (1 / 1.38) * 120 ) * 0.6
+        
+        #VDCC
+        gca_bar_abs_VDCC nS = gca_bar_VDCC * 4 * pi * ( ( 3 * volume_CR ) / ( 4 * pi )  )**(2 / 3)
+        
+    input:
+        inh_spikes <- inhibitory spike
+        exc_spikes <- excitatory spike
+        AMPA <- spike
+        NMDA <- spike
+        I_stim pA <- continuous
+
+    output:
+        spike
+
+    update:
+       
+        loga = ln( cao_CR / Ca_concentrazione_i )
+
+        # Storing the previous value of C_star
+        c_star_past mol/m**3 = c_star_corrente
+
+        # Updating the current value of C_star
+        c_star_corrente = C_star
+
+        integrate_odes()
+
+        # Heaviside function update
+        if (C_star - theta_p) < 0:
+            Heaviside_p  = 0
+        elif (C_star - theta_p) > 0:
+            Heaviside_p = 1
+        else:
+            Heaviside_p = 0.5  # C_star == theta_p
+
+        if (C_star - theta_d) < 0:
+            Heaviside_d = 0
+        elif (C_star - theta_d) > 0:
+            Heaviside_d = 1
+        else:
+            Heaviside_d = 0.5  # C_star == theta_d
+
+
+        # Definition of variables for feedback
+        B_variable mol/m**3 = c_star_past - theta_d_ausiliaria
+        C_variable mol/m**3 = c_star_corrente - theta_d_ausiliaria
+        D_variable mol/m**3 = c_star_corrente - theta_d
+        # Condition for activating feedback
+        if B_variable > 0 and C_variable < 0:
+            feedback_active = 1  # Activate feedback
+        if feedback_active == 1 and D_variable > 0:
+            feedback_active = 0  # Deactivates feedback
+
+        # feedback based on active status
+        if feedback_active == 1:
+            feedback = 1
+            
+        else:
+            feedback = 0
+
+            
+        #membrane potential/spike shape modifications
+        if r == 0:           
+            flag = 0
+            if flag_C == 1:
+                g_spike = 1
+                if V_m < E_ref:
+                    g_spike = 0
+                    flag_C = 0
+                    V_th = V_th_fissa
+                    flag_B = 0 
+                           
+        if r != 0: # neuron is absolute refractory
+            r =  r - 1
+            V_m = V_reset # clamp potential
+            flag = 1
+            flag_B = 1
+            flag_C = 1
+            
+        if flag == 0 and V_m >= V_th and flag_B == 0:  # neuron is not absolute refractory
+            r = RefractoryCounts
+            V_th = 35 * mV
+            V_m = V_reset # clamp potential
+            flag = 1
+            emit_spike()

@@ -1,0 +1,253 @@
+neuron calcium_alpha:
+    state:
+        r integer = 0      # counts number of tick during the refractory period
+        V_m mV = E_L   # membrane potential
+        calcium_conc real = calcium_conc_init #calcium concentration [mM] 
+        rho real = 0.0  # Synaptic efficacy variable
+        c_star real = 0 # Integrated calcium for plasticity
+        g_NMDA real = 0
+        g_NMDA$ real = NMDAInitialValue
+        m_VDCC real = m_VDCC_init      # Activation variable for VDCC
+        h_VDCC real =  h_VDCC_init      # Inactivation variable for VDCC
+        recordable g_AMPA real = 0
+        g_AMPA$ real = AMPAInitialValue
+        IKNa_D nS = 0 nS
+        g_AMPA_plasticity real = 0.5
+        U real = 0.5  # Probabilita di rilascio iniziale
+        U_SE real = 0.5  # Probabilita di rilascio stabile iniziale
+        NRRP integer = N_sites  # Numero di vescicole nel pool prontamente rilasciabile
+        t_syn ms = 0.0 ms  # Tempo dell'ultimo spike presinaptico
+        t_now ms = 0.0 ms  # Tempo corrente
+        delta_spike real = 0.0  # Indicatore di spike
+        g_spike boolean = false
+        
+    equations:
+        kernel g_inh = (e/tau_syn_inh) * t * exp(-t/tau_syn_inh)
+        kernel g_exc = (e/tau_syn_exc) * t * exp(-t/tau_syn_exc)
+        
+        kernel g_NMDA' = g_NMDA$ - g_NMDA / NMDA_Tau_2,
+               g_NMDA$' = -g_NMDA$ / NMDA_Tau_1
+               
+        #kernel g_AMPA' = g_AMPA$ - g_AMPA  / AMPA_Tau_2,
+         #      g_AMPA$' = -g_AMPA$ / AMPA_Tau_1
+               
+        # Conduttanza AMPA
+        kernel g_AMPA' = g_AMPA_plasticity * (g_AMPA$ - g_AMPA  / AMPA_Tau_2),
+               g_AMPA$' = -g_AMPA$ / AMPA_Tau_1
+               
+        # Steady-state activation and inactivation
+        inline m_inf real = 1 / (1 + exp((V_hm - V_m) / k_m))
+        inline h_inf real = 1 / (1 + exp((V_hh - V_m) / k_h))
+
+        # Activation and inactivation dynamics
+        m_VDCC' = (m_inf - m_VDCC) / tau_m
+        h_VDCC' = (h_inf - h_VDCC) / tau_h
+
+        # Total VDCC conductance
+        inline g_VDCC nS = VDCC_G_peak * m_VDCC * m_VDCC * h_VDCC
+
+        inline I_syn_exc pA = convolve(g_exc, exc_spikes) * nS * ( V_m - E_exc )
+        inline I_syn_inh pA = convolve(g_inh, inh_spikes) * nS * ( V_m - E_inh )
+        inline I_leak pA = g_L * ( V_m - E_L )
+        
+        inline I_Na pA = -g_NaL * ( V_m - E_Na )
+        inline I_K pA = -g_KL * ( V_m - E_K )
+        
+        # I_Na(p), m_inf^3 according to Compte et al, J Neurophysiol 2003 89:2707
+        inline INaP_thresh mV = -55.7 mV
+        inline INaP_slope mV = 7.7 mV
+        inline m_inf_NaP real = 1.0 / ( 1.0 + exp( -( V_m - INaP_thresh ) / INaP_slope ) )
+        # Persistent Na current; member only to allow recording
+        recordable inline I_NaP pA = -NaP_g_peak * m_inf_NaP**3 * ( V_m - NaP_E_rev )
+
+        inline d_half real = 0.25
+        inline m_inf_KNa real = 1.0 / ( 1.0 + ( d_half / ( IKNa_D / nS ) )**3.5 )
+        # Depol act. K current; member only to allow recording
+        recordable inline I_KNa pA = -KNa_g_peak * m_inf_KNa * ( V_m - KNa_E_rev )
+        
+        inline conv_for_nmda real = convolve(g_NMDA, exc_spikes)
+        inline m_param  real = 1 / (1 + Mg_param * exp(-alpha * V_m) / beta)
+        inline I_syn_nmda real = -conv_for_nmda * nS * ( V_m - NMDA_E_rev ) * NMDA_fraction / ( 1 + exp( ( NMDA_Vact - V_m ) / NMDA_Sact ) )
+        inline I_syn_ampa pA = -convolve(g_AMPA, exc_spikes) * nS * ( V_m - AMPA_E_rev )
+        recordable inline I_VDCC real = g_VDCC * (V_m - E_Ca)
+        inline step_p real = heaviside(c_star - theta_p)
+        inline step_d real = heaviside(c_star - theta_d)
+        
+        inline P_f real = (4 * Ca_ext * P_Ca) / (4 * Ca_ext * P_Ca + P_M) 
+        inline G_hat_NMDA real = G_NMDA_peak * P_f * (-conv_for_nmda)  
+        recordable inline I_NMDA real = G_hat_NMDA * (V_m - E_NMDA)  # only fraction of current like in paper
+        
+        inline tau_D real = 1250.0 # yes, 1.25 s
+        inline D_thresh mV = -10.0 mV
+        inline D_slope mV = 5.0 mV
+        inline D_influx_peak real = 0.025
+        inline D_influx real = 1.0 / ( 1.0 + exp( -( V_m - D_thresh ) / D_slope ) )
+        
+        inline G_bar_AMPA real = G_AMPA_d + rho * (G_AMPA_p - G_AMPA_d)
+        
+        # Calcolo di U_SE medio in base a rho
+        inline U_SE_mean real = U_SE_d + rho * (U_SE_p - U_SE_d)
+
+        # Dinamica di U_SE (integrazione con il cambio causato da rho)
+        U_SE' = (U_SE_mean - U_SE) / tau_change
+
+        # Probabilita di rilascio dinamica U(t)
+        U' = (U_SE - U) / tau_fac + delta_spike * (U_SE * (1 - U))
+        t_now' = 1.0 * ms/s# Incremento del tempo
+        delta_spike' = (g_spike) ? 1.0 : 0.0 * 1/s # Aggiornamento automatico di delta_spike
+        
+        recordable inline U_monitor real = U
+
+        # Probabilita di sopravvivenza del pool recuperabile
+        inline P_surv real = exp(-(t_now - t_syn) / tau_dep)
+
+        # Recupero delle vescicole secondo il modello binomiale
+        NRRP' = -NRRP * delta_spike + (N_sites - NRRP) * P_surv / tau_dep
+        
+        g_AMPA_plasticity' = (G_bar_AMPA - g_AMPA_plasticity) / tau_change
+        
+        IKNa_D' = ( D_influx_peak * D_influx * nS - ( IKNa_D  - KNa_D_EQ / mV ) / tau_D ) / ms
+        # 
+        # - I_syn_exc
+        V_m' = ((-I_leak  - I_syn_inh + I_e + I_stim+ I_Na + I_K + I_NaP + I_KNa + I_syn_ampa + I_NMDA + I_VDCC) / C_m)
+    
+        # Calcium dynamics
+        calcium_conc' = (((I_NMDA + I_VDCC) * etha) / (2 * X * F_param)) - ((calcium_conc - calcium_conc_init) / tau_calcium)
+        
+        # Synaptic efficacy dynamics
+        c_star' = -c_star / tau_star + (calcium_conc - calcium_conc_init)
+        rho' = (-rho * (1 - rho) * (0.5 - rho) + gamma_p * (1 - rho) * step_p  - gamma_d * rho * step_d) / tau_rho # is it argument or multiplication?
+        
+    parameters:
+        V_th mV = -55 mV         # Threshold potential
+        V_reset mV = -60 mV      # Reset potential
+        t_ref ms = 2 ms          # Refractory period
+        g_L nS = 16.6667 nS      # Leak conductance
+        C_m pF = 250 pF          # Membrane capacitance
+        E_exc mV = 0 mV          # Excitatory reversal potential
+        E_inh mV = -85 mV        # Inhibitory reversal potential
+        E_L mV = -70 mV          # Leak reversal potential (aka resting potential)
+        tau_syn_exc ms = 0.2 ms  # Synaptic time constant of excitatory synapse
+        tau_syn_inh ms = 2 ms    # Synaptic time constant of inhibitory synapse
+        tau_calcium ms = 12 ms   # from paper
+        tau_rho ms = 70000 ms     # Time constant for synaptic efficacy updates
+        tau_G ms = 500 ms        # Time constant for conductance changes
+        etha real = 0.04         # frac of free calcium
+        F_param real = 96485.3321      # Faraday constant from web
+        X real = 0.087           # spine volume average from web [um3]
+        calcium_conc_init real = 0.00007 # initial calcium concentraion [mM]
+        E_Ca mV = 120 mV        # Calcium reversal potential
+        E_AMPA mV = 0 mV        # AMPA reversal potential
+        E_NMDA mV = 0 mV        # NMDA reversal potential
+        Mg_param mmol = 1.2 mmol        # Magnesium concentration for NMDA block
+        alpha real = 0.062 # NMDA Mg2+ block parameter
+        beta real = 3.57   # NMDA Mg2+ block parameter
+        theta_p real = 0.36  # Potentiation threshold
+        theta_d real = 0.15   # Depression threshold
+        gamma_p real = 216.2 # Potentiation rate
+        gamma_d real = 101.5 # Depression rate
+        G_NMDA real = 0.05    # NMDA receptor conductance
+        G_VDCC real = 0.1    # VDCC conductance
+        NMDA_g_peak nS = 0.075 nS    # peak conductance
+        NMDA_Tau_1 ms = 4.0 ms       # rise time
+        NMDA_Tau_2 ms = 40.0 ms      # decay time, Tau_1 < Tau_2
+        NMDA_E_rev mV = 0.0 mV       # reversal potential
+        NMDA_Vact mV = -58.0 mV      # inactive for V << Vact, inflection of sigmoid
+        NMDA_Sact mV = 2.5 mV        # scale of inactivation
+        NMDA_fraction real = 1.0     # how to calc????
+        
+        AMPA_g_peak nS = 0.1 nS      # peak conductance
+        AMPA_E_rev mV = 0.0 mV       # reversal potential
+        AMPA_Tau_1 ms = 0.5 ms       # rise time
+        AMPA_Tau_2 ms = 2.4 ms       # decay time, Tau_1 < Tau_2
+        G_AMPA_d real = 0.5
+        G_AMPA_p real = 1.0
+        tau_change ms = 100.0 ms 
+        
+        # parameters for intrinsic currents
+        NaP_g_peak nS = 1.0 nS       # peak conductance for intrinsic current
+        NaP_E_rev mV = 30.0 mV       # reversal potential for intrinsic current
+        KNa_g_peak nS = 1.0 nS       # peak conductance for intrinsic current
+        KNa_E_rev mV = -90.0 mV      # reversal potential for intrinsic current
+        
+        E_Na mV = 30.0 mV
+        E_K mV = -90.0 mV
+        g_NaL nS =  0.2 nS
+        g_KL nS = 1.0 nS       # 1.0 - 1.85
+        KNa_D_EQ pA = 0.001 pA
+        
+        tau_star ms = 500 ms #278318 ms
+        
+        tau_m ms = 1.0 ms      # Time constant for m (activation)
+        tau_h ms = 27.0 ms     # Time constant for h (inactivation)
+        V_hm mV = -5.9 mV      # Half-activation voltage for m
+        k_m mV = 9.5 mV        # Slope factor for m
+        V_hh mV = -39.0 mV     # Half-inactivation voltage for h
+        k_h mV = -9.2 mV       # Slope factor for h
+        VDCC_G_peak nS= 0.5 nS
+        #g_VDCC real = 0.1
+        V_rest mV = -60 mV
+        
+        P_Ca real = 0.05
+        P_M real = 0.8
+        Ca_ext real = 1.2
+        G_NMDA_peak real = 0.05
+       
+        N_sites integer = 4        # Numero totale di siti di rilascio
+        tau_fac ms = 300.0 ms      # Costante di facilitazione
+        tau_dep ms = 800.0 ms      # Costante di depressione
+        U_SE_p real = 0.5  # Valore massimo di U_SE (potenziato)
+        U_SE_d real = 0.1  # Valore minimo di U_SE (depotenziato)
+        
+        # constant external input current
+        I_e pA = 0 pA
+
+    internals:
+        RefractoryCounts integer = steps(t_ref) # refractory time in steps
+        NMDAInitialValue real = compute_synapse_constant( NMDA_Tau_1, NMDA_Tau_2, NMDA_g_peak )
+        m_VDCC_init real = 1 / (1 + exp((V_hm - V_rest) / k_m))
+        h_VDCC_init real = 1 / (1 + exp((V_hh - V_rest) / k_h))
+        #AMPAInitialValue real = compute_synapse_constant( AMPA_Tau_1, AMPA_Tau_2, AMPA_g_peak )
+        AMPAInitialValue real = compute_synapse_constant( AMPA_Tau_1, AMPA_Tau_2, g_AMPA_plasticity )
+
+    input:
+        inh_spikes <- inhibitory spike
+        exc_spikes <- excitatory spike
+        I_stim pA <- continuous
+        #NMDA <- spike
+
+    output:
+        spike
+
+    update:
+        integrate_odes()
+        if g_spike:
+            t_syn = t_now  
+        if r != 0: # neuron is absolute refractory
+            r =  r - 1
+            V_m = V_reset # clamp potential
+            g_spike = false
+        elif V_m >= V_th:  # neuron is not absolute refractory
+            r = RefractoryCounts
+            V_m = V_reset # clamp potential
+            emit_spike()
+            g_spike = true
+            
+    function heaviside(param real) real: 
+        if param > 0:
+            return 1.0
+        else:
+            return 0.0
+            
+    function compute_synapse_constant(Tau_1 ms, Tau_2 ms, g_peak real) real:
+        # Factor used to account for the missing 1/((1/Tau_2)-(1/Tau_1)) term
+        # in the ht_neuron_dynamics integration of the synapse terms.
+        # See: Exact digital simulation of time-invariant linear systems
+        # with applications to neuronal modeling, Rotter and Diesmann,
+        # section 3.1.2.
+        exact_integration_adjustment real = ( ( 1 / Tau_2 ) - ( 1 / Tau_1 ) ) * ms
+
+        t_peak real = ( Tau_2 * Tau_1 ) * ln( Tau_2 / Tau_1 ) / ( Tau_2 - Tau_1 ) / ms
+        normalisation_factor real = 1 / ( exp( -t_peak / Tau_1 ) - exp( -t_peak / Tau_2 ) )
+
+        return g_peak * normalisation_factor * exact_integration_adjustment

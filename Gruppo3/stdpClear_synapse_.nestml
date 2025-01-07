@@ -1,0 +1,72 @@
+
+synapse stdpClear:
+    state:
+        w real = 1.    @nest::weight   # Synaptic weight
+        pre_trace real = 0.
+        post_trace real = 0.
+        pot_GB real = 0.
+        dep_GB real = 0.
+        Use real = 1
+        
+
+    parameters:
+        d ms = 1 ms  @nest::delay   # Synaptic transmission delay
+        lambda real = .01
+        tau_tr_pre ms = 20 ms
+        tau_tr_post ms = 20 ms
+        alpha real = 1
+        mu_plus real = 1
+        mu_minus real = 1
+        Wmax real = 100.
+        Wmin real = 0. 
+        UseD real = 0.3
+        UseP real = 50
+        
+    equations:
+        pre_trace' = -pre_trace / tau_tr_pre
+        post_trace' = -post_trace / tau_tr_post
+        
+        
+    input:
+        pre_spikes <- spike
+        post_spikes <- spike
+        rho_GB_post real <- continuous
+
+    output:
+        spike
+
+    onReceive(post_spikes):
+        post_trace += 1
+        
+        Use = UseD + rho_GB_post * (UseP - UseD)
+        print("INFO Postsinaptic spike: valore di Use = {Use} al tempo t = {t}")
+        
+        #w_ real = UseD + rho_GB * (UseP - UseD)
+        #w = min(UseP, w_)
+    
+        # potentiate synapse
+        w_ real = Wmax * ( w / Wmax  + (lambda * ( 1. - ( w / Wmax ) )**mu_plus * pre_trace * Use))
+        w = min(Wmax, w_)
+
+    onReceive(pre_spikes):
+        pre_trace += 1
+        
+        Use = UseD + rho_GB_post * (UseP - UseD)
+        print("INFO Presinaptic spike: valore di Use = {Use} al tempo t = {t}")
+        
+        #w_ real = UseD + rho_GB * (UseP - UseD)    
+        #w = max(UseD, w_)
+
+        # depress synapse
+        w_ real = Wmax * ( w / Wmax  - ( alpha * lambda * ( w / Wmax )**mu_minus * post_trace * Use))
+        w = max(Wmin, w_)
+
+        # deliver spike to postsynaptic partner
+        deliver_spike(w, d)
+
+     # the idea was to use the neurotransmitter release probability as weight for synaptic strength
+     # through the expression w=Wmin+rho_GB*(Wmax-Wmin), with W_min = U_se_dep and Wmax = U_se_pot.
+     # Rho was successfully computed when c_star was always over or under both thresholds, but moving 
+     #from an under threshold condition to an over threshold condition stopped the program to compute 
+     #further values of rho_GB. Anytime we tried to correctly adapt the thresholds we retrieved no 
+     #result. Therefore also g_AMPA update has not been possible for c_star passing the thresholds.

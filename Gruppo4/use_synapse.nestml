@@ -1,0 +1,55 @@
+"""
+
+
+Description
++++++++++++
+
+ We started from a STDP, bu after the modifications we get a static synapse where the weight is rappresented from a Use(probability of vescicle release), 
+ this variable is passed from the postsynaptic neuron. 
+ 
+
+
+
+
+"""
+synapse stdp:
+    state:
+        w real = 1.    @nest::weight   # Synaptic weight
+        pre_trace real = 0.
+        post_trace real = 0.
+
+    parameters:
+        d ms = 1 ms  @nest::delay   # Synaptic transmission delay
+        lambda real = .01
+        tau_tr_pre ms = 20 ms
+        tau_tr_post ms = 20 ms
+        alpha real = 1
+        mu_plus real = 1
+        mu_minus real = 1
+        Wmax real = 100.
+        Wmin real = 0.
+
+    equations:
+        pre_trace' = -pre_trace / tau_tr_pre
+        post_trace' = -post_trace / tau_tr_post
+
+    input:
+        pre_spikes <- spike
+        post_spikes <- spike
+        USE_syn real <- continuous
+
+    output:
+        spike
+
+    onReceive(post_spikes):
+        ########################## as we can see the weights are just related to the USE-syn variable
+        w = USE_syn
+
+    onReceive(pre_spikes):
+        pre_trace += 1
+        
+        
+        ########################## as we can see the weights are just related to the USE-syn variable
+        w = USE_syn
+
+        deliver_spike(w, d)
