@@ -1,0 +1,126 @@
+
+synapse stdp_ca_synapse:
+    state: 
+        u real = 0 
+        recovered integer = 5
+        released integer = 0
+        unrecovered integer = 0
+        success1 real = 0 
+        result1 real = 0
+        success2 real = 0 
+        result2 real = 0
+        p_rec real = 0.5
+        tsyn ms = 0 ms
+        UseTsyn real = 0.5
+        Dummy real = 0.5
+        post_flag integer = 0
+        tsyn_last ms = 0 ms
+        UseTsyn_last real = 0.5
+    equations: 
+        
+        Dummy' = (dummy_bar - Dummy)/dummy_tau
+        
+        
+        
+    
+    
+
+    parameters:
+        d ms = 1 ms  @nest::delay   # Synaptic transmission delay
+        Dep_TM ms = 100 ms
+        Fac_TM ms = 10 ms
+        Nrrp_TM integer = 5
+        dummy_tau ms = 1000000 ms
+        dummy_bar real = 200
+        
+    
+        
+    input:
+        pre_spikes <- spike
+        post_spikes <- spike
+        Use real <- continuous #provare a mandare direttamente Use_TM
+
+    output:
+        spike
+
+
+    onReceive(pre_spikes):
+        
+        tsyn = t
+        UseTsyn = Use
+    
+        
+        u = UseTsyn_last + u*(1 - UseTsyn_last)*exp(-(t - tsyn_last)/Fac_TM)
+        p_rec = 1 - exp(-(t - tsyn_last)/Dep_TM)
+        println("tsyn is {tsyn_last} and t is {t}, UseTsyn is {UseTsyn_last}")
+        integrate_odes()
+        tsyn_last = tsyn
+        UseTsyn_last = UseTsyn
+        
+        
+        success1 real = 0
+        
+        count integer = 0
+        
+        for count  in 0 ... ( unrecovered - 1 ) step 1 :
+            result1 = random_uniform( 0 , 1 )
+            if result1 <= p_rec : 
+                success1 = success1 + 1 
+                    
+        recovered = recovered + success1
+        
+        success2 real = 0
+        
+        count1 integer = 0
+        
+        for count1 in 0 ... ( recovered - 1 ) step 1 : 
+            result2 = random_uniform(0,1)
+            if result2 <= u : 
+                success2 = success2 + 1 
+                    
+        released = success2
+         
+        recovered = recovered - released
+         
+        unrecovered = Nrrp_TM - recovered
+        
+        
+         
+        
+         
+        deliver_spike(released, d) #released
+        println("delivered {released} vesicles out of {Nrrp_TM} at time {t}")
+         
+        
+        
+        
+        
+    
+        
+       
+    onReceive(post_spikes):
+        time_since_last_spike ms = t - tsyn
+        
+    
+        
+        
+        
+    
+        
+        
+        
+        
+   
+   
+   
+
+
+
+
+
+
+
+
+
+
+
