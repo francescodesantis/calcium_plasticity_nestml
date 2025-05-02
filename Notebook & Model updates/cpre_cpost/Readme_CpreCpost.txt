@@ -1,0 +1,2 @@
+-Simulation for the calculation of Cpre and Cpost is at the very last of file “notebook_CpreCpost”
+-in order to run the simulation correctly the model has to be built with “stdp_ca_synapse_CpreCpost.nestml” and “mhill_tononi_neuron_TM_01_04.nestml”.
